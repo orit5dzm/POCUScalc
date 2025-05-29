@@ -436,7 +436,10 @@
     </div>
 
     <script>
-        // Хранилище данных (в реальном приложении будет Google Sheets)
+        // ЗАМЕНИТЕ НА ВАШ URL от Google Apps Script
+        const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbz6z81OOeBjTLCYWz0ccbwOUWpzPrJEFfkADUvwZkDiSqSf1B6OKYIA3-gtoPLAZo6b/exec';
+        
+        // Локальное хранилище как резерв
         let studyData = JSON.parse(localStorage.getItem('studyData') || '{}');
         
         // Форматирование номера МК
@@ -530,37 +533,70 @@
                 return;
             }
             
-            const history = studyData[mkNumber] || [];
+            // Показать индикатор загрузки
             const historySection = document.getElementById('historySection');
+            const historyList = document.getElementById('historyList');
+            historyList.innerHTML = '<div class="alert alert-info">Загрузка данных...</div>';
+            historySection.classList.remove('hidden');
+            
+            // Запрос к Google Sheets
+            fetch(`${APPS_SCRIPT_URL}?mkNumber=${encodeURIComponent(mkNumber)}`)
+                .then(response => response.json())
+                .then(data => {
+                    displayPatientHistory(data, mkNumber);
+                })
+                .catch(error => {
+                    console.error('Ошибка при загрузке данных:', error);
+                    // Fallback к локальным данным
+                    const localHistory = studyData[mkNumber] || [];
+                    displayPatientHistory(localHistory, mkNumber);
+                    
+                    if (localHistory.length === 0) {
+                        historyList.innerHTML = '<div class="alert alert-warning">Нет данных о проведённых исследованиях. Возможны проблемы с подключением к серверу.</div>';
+                    }
+                });
+        }
+        
+        function displayPatientHistory(history, mkNumber) {
             const historyList = document.getElementById('historyList');
             
             if (history.length === 0) {
                 historyList.innerHTML = '<div class="alert alert-info">Нет данных о проведённых исследованиях</div>';
             } else {
-                historyList.innerHTML = history.map((study, index) => `
-                    <div class="history-item">
-                        <div class="history-header">
-                            <div>
-                                <strong>${new Date(study.date).toLocaleString('ru-RU')}</strong>
-                                <span style="margin-left: 15px; padding: 4px 8px; border-radius: 4px; font-size: 12px; ${study.isResponder ? 'background: #d4edda; color: #155724;' : 'background: #f8d7da; color: #721c24;'}">
-                                    ${study.isResponder ? 'Fluid responder' : 'Non-fluid responder'}
-                                </span>
+                historyList.innerHTML = history.map((study, index) => {
+                    // Обработка данных в зависимости от источника (Google Sheets или локальные)
+                    const studyData = Array.isArray(study) ? {
+                        date: study[0],
+                        isResponder: study[2],
+                        measurements: JSON.parse(study[3] || '[]'),
+                        fullConclusion: study[6] || 'Заключение недоступно'
+                    } : study;
+                    
+                    const date = new Date(studyData.date).toLocaleString('ru-RU');
+                    
+                    return `
+                        <div class="history-item">
+                            <div class="history-header">
+                                <div>
+                                    <strong>${date}</strong>
+                                    <span style="margin-left: 15px; padding: 4px 8px; border-radius: 4px; font-size: 12px; ${studyData.isResponder ? 'background: #d4edda; color: #155724;' : 'background: #f8d7da; color: #721c24;'}">
+                                        ${studyData.isResponder ? 'Fluid responder' : 'Non-fluid responder'}
+                                    </span>
+                                </div>
+                                <div style="display: flex; gap: 8px;">
+                                    <button class="btn btn-success" style="padding: 5px 10px; font-size: 12px;" onclick="copyHistoryConclusion(${index}, '${mkNumber}')">Копировать</button>
+                                    <button class="btn btn-danger" style="padding: 5px 10px; font-size: 12px;" onclick="deleteStudy(${index}, '${mkNumber}')">Удалить</button>
+                                </div>
                             </div>
-                            <div style="display: flex; gap: 8px;">
-                                <button class="btn btn-success" style="padding: 5px 10px; font-size: 12px;" onclick="copyFullConclusion(${index}, '${mkNumber}')">Копировать</button>
-                                <button class="btn btn-danger" style="padding: 5px 10px; font-size: 12px;" onclick="deleteStudy(${index}, '${mkNumber}')">Удалить</button>
+                            <div class="history-data">
+                                ${studyData.measurements && studyData.measurements.filter(m => m.value !== 'Н/И' && m.value !== '-').map(m => 
+                                    `<div><strong>${m.name}:</strong> ${m.value}</div>`
+                                ).join('') || '<div>Данные измерений недоступны</div>'}
                             </div>
                         </div>
-                        <div class="history-data">
-                            ${study.measurements.filter(m => m.value !== 'Н/И' && m.value !== '-').map(m => 
-                                `<div><strong>${m.name}:</strong> ${m.value}</div>`
-                            ).join('')}
-                        </div>
-                    </div>
-                `).join('');
+                    `;
+                }).join('');
             }
-            
-            historySection.classList.remove('hidden');
         }
         
         function calculate() {
@@ -694,6 +730,23 @@
             }
         }
         
+        function copyHistoryConclusion(index, mkNumber) {
+            // Попробуем найти данные в текущем результате поиска
+            const historyItems = document.querySelectorAll('.history-item');
+            if (historyItems[index]) {
+                // Для Google Sheets данных нужно получить заключение из локальных данных
+                // или восстановить его из доступной информации
+                const localHistory = studyData[mkNumber];
+                if (localHistory && localHistory[index] && localHistory[index].fullConclusion) {
+                    navigator.clipboard.writeText(localHistory[index].fullConclusion).then(() => {
+                        alert('Заключение скопировано в буфер обмена');
+                    });
+                } else {
+                    alert('Заключение недоступно для копирования');
+                }
+            }
+        }
+        
         function copyFullConclusion(index, mkNumber) {
             const study = studyData[mkNumber][index];
             const conclusion = study.fullConclusion;
@@ -709,12 +762,9 @@
                 return;
             }
             
-            if (!studyData[mkNumber]) {
-                studyData[mkNumber] = [];
-            }
-            
             const studyRecord = {
                 date: new Date().toISOString(),
+                mkNumber: mkNumber,
                 measurements: window.currentStudyData.measurements,
                 isResponder: window.currentStudyData.isResponder,
                 responderCount: window.currentStudyData.responderCount,
@@ -724,13 +774,58 @@
                 fullConclusion: window.currentConclusion
             };
             
+            // Показать индикатор сохранения
+            const saveBtn = document.getElementById('saveBtn');
+            const originalText = saveBtn.textContent;
+            saveBtn.textContent = 'Сохранение...';
+            saveBtn.disabled = true;
+            
+            // Отправка в Google Sheets
+            fetch(APPS_SCRIPT_URL, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(studyRecord)
+            })
+            .then(response => {
+                if (response.ok) {
+                    return response.text();
+                }
+                throw new Error('Ошибка сервера');
+            })
+            .then(result => {
+                console.log('Данные сохранены в Google Sheets:', result);
+                alert('Исследование сохранено успешно в Google Таблицах');
+                
+                // Также сохранить локально как резерв
+                saveLocallyAsBackup(mkNumber, studyRecord);
+                
+                // Обновить список исследований
+                searchPatient();
+            })
+            .catch(error => {
+                console.error('Ошибка при сохранении в Google Sheets:', error);
+                
+                // Fallback: сохранить локально
+                saveLocallyAsBackup(mkNumber, studyRecord);
+                alert('Исследование сохранено локально (проблемы с подключением к серверу)');
+                
+                // Обновить список исследований
+                searchPatient();
+            })
+            .finally(() => {
+                saveBtn.textContent = originalText;
+                saveBtn.disabled = false;
+            });
+        }
+        
+        function saveLocallyAsBackup(mkNumber, studyRecord) {
+            if (!studyData[mkNumber]) {
+                studyData[mkNumber] = [];
+            }
             studyData[mkNumber].push(studyRecord);
             localStorage.setItem('studyData', JSON.stringify(studyData));
-            
-            alert('Исследование сохранено успешно');
-            
-            // Обновление списка исследований
-            searchPatient();
         }
         
         function deleteStudy(index, mkNumber) {
